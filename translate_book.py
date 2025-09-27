@@ -2,11 +2,19 @@ import argparse
 import os
 import sys
 import tempfile
+import json
 from copy import deepcopy
 from docx import Document
 from openai import OpenAI
 from google.cloud import translate_v2 as translate
-import deepl
+from google.oauth2 import service_account
+
+# --- Optional dotenv loader (for local .env) ---
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # safe to ignore if not installed
 
 # --- Optional Streamlit (only used for web) ---
 try:
@@ -15,14 +23,35 @@ try:
 except ImportError:
     STREAMLIT = False
 
-# --- Setup ---
-OPENAI_API_KEY = os.getenv("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")
-DEEPL_API_KEY = os.getenv("DEEPL_API_KEY")
-client = OpenAI(api_key=OPENAI_API_KEY)
+# --- Setup API Keys ---
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+if not OPENAI_API_KEY:
+    print("❌ OpenAI API key not found (set OPENAI_API_KEY in .env or Streamlit Secrets).")
+else:
+    print("✅ OpenAI API key found.")
+
+client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+
+# --- Google Cloud Credentials ---
+google_creds = None
+try:
+    if os.getenv("GOOGLE_CLOUD_KEY"):
+        gcloud_key = json.loads(os.getenv("GOOGLE_CLOUD_KEY"))
+        google_creds = service_account.Credentials.from_service_account_info(gcloud_key)
+        print("✅ Google Cloud credentials loaded from GOOGLE_CLOUD_KEY.")
+    elif os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
+        google_creds = service_account.Credentials.from_service_account_file(
+            os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+        )
+        print(f"✅ Google Cloud credentials loaded from file: {os.getenv('GOOGLE_APPLICATION_CREDENTIALS')}")
+    else:
+        print("❌ Google Cloud credentials not found (set GOOGLE_APPLICATION_CREDENTIALS or GOOGLE_CLOUD_KEY).")
+except Exception as e:
+    print(f"❌ Error loading Google Cloud credentials: {e}")
 
 # --- Translation Functions ---
 def translate_openai(text, target_lang, mode="both"):
-    if not text.strip():
+    if not text.strip() or not client:
         return text, text
     prompt = f"""
     Translate the following passage from English into {target_lang}.
@@ -61,22 +90,17 @@ def translate_openai(text, target_lang, mode="both"):
 def translate_google(text, target_lang):
     if not text.strip():
         return text
-    translate_client = translate.Client()
+    if google_creds:
+        translate_client = translate.Client(credentials=google_creds)
+    else:
+        translate_client = translate.Client()  # fallback, requires GOOGLE_APPLICATION_CREDENTIALS
     result = translate_client.translate(text, target_language=target_lang)
     return result["translatedText"]
-
-def translate_deepl(text, target_lang):
-    if not text.strip():
-        return text
-    translator = deepl.Translator(DEEPL_API_KEY)
-    result = translator.translate_text(text, target_lang=target_lang)
-    return result.text
 
 # --- Format-preserving translation ---
 def translate_book(input_file, provider, target_lang, mode):
     original = Document(input_file)
 
-    # Copies of the original doc keep styles/formatting
     doc_literal = deepcopy(original)
     doc_poetic = deepcopy(original)
 
@@ -91,9 +115,6 @@ def translate_book(input_file, provider, target_lang, mode):
             elif provider == "google":
                 new_text = translate_google(para.text, target_lang)
                 doc_literal.paragraphs[i].text = new_text
-            elif provider == "deepl":
-                new_text = translate_deepl(para.text, target_lang)
-                doc_literal.paragraphs[i].text = new_text
         else:
             doc_literal.paragraphs[i].text = ""
             doc_poetic.paragraphs[i].text = ""
@@ -106,7 +127,7 @@ def cli_main():
     parser.add_argument("input", help="Input .docx file")
     parser.add_argument("output", help="Output .docx file")
     parser.add_argument("language", help="Target language code (e.g. fr, vi, es)")
-    parser.add_argument("--provider", choices=["openai", "google", "deepl"], default="openai")
+    parser.add_argument("--provider", choices=["openai", "google"], default="openai")
     parser.add_argument("--mode", choices=["literal", "poetic", "both"], default="both",
                         help="For OpenAI only")
     args = parser.parse_args()
@@ -128,7 +149,7 @@ def web_main():
     st.title("📖 Language Translation eBook")
     uploaded_file = st.file_uploader("Upload your .docx file", type="docx")
 
-    provider = st.selectbox("Translation provider", ["openai", "google", "deepl"])
+    provider = st.selectbox("Translation provider", ["openai", "google"])
     target_lang = st.text_input("Target language code (e.g. fr, vi, es)", "vi")
     mode = st.selectbox("Mode (for OpenAI only)", ["both", "literal", "poetic"])
 
