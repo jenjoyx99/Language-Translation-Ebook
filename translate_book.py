@@ -9,12 +9,14 @@ from openai import OpenAI
 from google.cloud import translate_v2 as translate
 from google.oauth2 import service_account
 
-# --- Optional dotenv loader (for local .env) ---
+# --- Load .env explicitly (always from project folder) ---
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    DOTENV_PATH = r"C:\Jessexa.com\my book\Dreamer and the Mirror\Language Translation Ebook\.env"
+    load_dotenv(dotenv_path=DOTENV_PATH)
+    print(f"✅ Loaded .env from {DOTENV_PATH}")
 except ImportError:
-    pass  # safe to ignore if not installed
+    print("⚠️ python-dotenv not installed, skipping .env load")
 
 # --- Optional Streamlit (only used for web) ---
 try:
@@ -23,14 +25,35 @@ try:
 except ImportError:
     STREAMLIT = False
 
-# --- Setup API Keys ---
+# --- Setup OpenAI Keys ---
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if not OPENAI_API_KEY:
-    print("❌ OpenAI API key not found (set OPENAI_API_KEY in .env or Streamlit Secrets).")
-else:
-    print("✅ OpenAI API key found.")
+OPENAI_ORG_ID = os.getenv("OPENAI_ORG_ID")
+OPENAI_PROJECT_ID = os.getenv("OPENAI_PROJECT_ID")
 
-client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+print("---- ENV CHECK ----")
+print("OPENAI_API_KEY:", (OPENAI_API_KEY[:15] + "...") if OPENAI_API_KEY else None)
+print("OPENAI_ORG_ID:", OPENAI_ORG_ID)
+print("OPENAI_PROJECT_ID:", OPENAI_PROJECT_ID)
+print("GOOGLE_APPLICATION_CREDENTIALS:", os.getenv("GOOGLE_APPLICATION_CREDENTIALS"))
+print("-------------------")
+
+client = None
+if OPENAI_API_KEY:
+    try:
+        if OPENAI_API_KEY.startswith("sk-proj"):
+            client = OpenAI(
+                api_key=OPENAI_API_KEY,
+                organization=OPENAI_ORG_ID,
+                project=OPENAI_PROJECT_ID
+            )
+            print("✅ OpenAI client initialized with project key.")
+        else:
+            client = OpenAI(api_key=OPENAI_API_KEY)
+            print("✅ OpenAI client initialized with classic key.")
+    except Exception as e:
+        print(f"❌ Failed to initialize OpenAI client: {e}")
+else:
+    print("❌ OpenAI API key not found (set OPENAI_API_KEY in .env or Streamlit Secrets).")
 
 # --- Google Cloud Credentials ---
 google_creds = None
@@ -93,7 +116,7 @@ def translate_google(text, target_lang):
     if google_creds:
         translate_client = translate.Client(credentials=google_creds)
     else:
-        translate_client = translate.Client()  # fallback, requires GOOGLE_APPLICATION_CREDENTIALS
+        translate_client = translate.Client()
     result = translate_client.translate(text, target_language=target_lang)
     return result["translatedText"]
 
